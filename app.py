@@ -2,88 +2,172 @@ import pandas as pd
 import streamlit as st
 
 # 1. 페이지 기본 설정
-st.set_page_config(page_title="KBO 타자 MVP 점수 계산기", layout="centered")
-st.title("⚾ KBO 타자 MVP 점수 산출 프로그램")
+st.set_page_config(page_title="KBO 타자 MVP 선택 모델", layout="wide")
+st.title("⚾ KBO 타자 MVP 선택 모델 (규정 타석 적용)")
 st.caption(
-    "상관관계 분석 기반 가중치: 장타율(37.3%) + 타율(33.1%) + 출루율(29.6%)"
+    "1차 비율 지표 가중합 모델: 장타율(37.3%) + 타율(33.1%) + 출루율(29.6%)"
 )
 
 
-# 2. 데이터 로드 함수 (캐싱 적용)
+# 2. 연도별 KBO 실제 MVP 타자 단독 수상 데이터 (2010~2025)
+# (투수가 MVP를 수상한 해는 최우수 타자를 기재)
+ACTUAL_MVPS = {
+    2010: {"선수명": "이대호", "팀": "롯데"},
+    2011: {"선수명": "최형우", "팀": "삼성"},  # (실제 MVP 윤석민 투수)
+    2012: {"선수명": "박병호", "팀": "넥센"},
+    2013: {"선수명": "박병호", "팀": "넥센"},
+    2014: {"선수명": "서건창", "팀": "넥센"},
+    2015: {"선수명": "테임즈", "팀": "NC"},
+    2016: {"선수명": "최형우", "팀": "삼성"},  # (실제 MVP 니퍼트 투수)
+    2017: {"선수명": "양의지", "팀": "두산"},  # (실제 MVP 양현종 투수)
+    2018: {"선수명": "김재환", "팀": "두산"},
+    2019: {"선수명": "박병호", "팀": "키움"},  # (실제 MVP 린드블럼 투수)
+    2020: {"선수명": "로하스", "팀": "KT"},
+    2021: {"선수명": "강백호", "팀": "KT"},  # (실제 MVP 미란다 투수)
+    2022: {"선수명": "이정후", "팀": "키움"},
+    2023: {"선수명": "노시환", "팀": "한화"},  # (실제 MVP 페디 투수)
+    2024: {"선수명": "김도영", "팀": "KIA"},
+    2025: {"선수명": "디아즈", "팀": "삼성"},
+}
+
+
+# 3. 데이터 로드 및 전처리 함수
 @st.cache_data
-def load_data():
+def load_and_process_data():
     excel_path = "KBO_타자투수_통합_마스터_한글지표_출루율OPS추가.xlsx"
     df = pd.read_excel(excel_path, sheet_name="타자_MASTER_2010_2025")
 
-    # 수치형 데이터 변환 및 정제
-    num_cols = ["연도", "타율", "출루율", "장타율", "OPS", "경기", "타석", "홈런"]
+    # 수치형 변환
+    num_cols = ["연도", "타율", "출루율", "장타율", "OPS", "경기", "타석", "홈런", "안타"]
     for col in num_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # 가중치 산정 (SLG 37.3%, AVG 33.1%, OBP 29.6%)
+    W_SLG, W_AVG, W_OBP = 0.373, 0.331, 0.296
+    df["MVP점수"] = (
+        (df["장타율"] * W_SLG) + (df["타율"] * W_AVG) + (df["출루율"] * W_OBP)
+    )
+
+    # 연도별 규정 타석 계산 (144경기 기준 446타석, 2014 이전은 396~412타석)
+    # 규정타석 공식 = 팀 경기 수 * 3.1
+    def get_qualified_pa(year):
+        if year in [2010, 2011, 2012]:
+            return 133 * 3.1  # 412타석
+        elif year in [2013, 2014]:
+            return 128 * 3.1  # 396타석
+        else:
+            return 144 * 3.1  # 446타석
+
+    df["규정타석"] = df["연도"].apply(get_qualified_pa)
+    df["규정타석충족"] = df["타석"] >= df["규정타석"]
 
     return df
 
 
-df_batter = load_data()
+df_batter = load_and_process_data()
 
-# 3. 가중치 정의
-W_SLG = 0.373  # 장타율 가중치 (37.3%)
-W_AVG = 0.331  # 타율 가중치 (33.1%)
-W_OBP = 0.296  # 출루율 가중치 (29.6%)
+# 4. 사이드바 - 연도 선택 및 규정 타석 필터 옵션
+st.sidebar.header("⚙️ 분석 설정")
+available_years = sorted(
+    df_batter["연도"].dropna().unique().astype(int), reverse=True
+)
+selected_year = st.sidebar.selectbox("연도 선택", available_years)
 
-# 4. 사용자 입력 폼
-st.subheader("🔍 선수 성적 및 MVP 점수 조회")
-col1, col2 = st.columns(2)
+only_qualified = st.sidebar.checkbox("규정 타석 충족자만 보기", value=True)
 
-with col1:
-    # 엑셀 데이터 내 사용 가능한 연도 목록 추출
-    available_years = sorted(
-        df_batter["연도"].dropna().unique().astype(int), reverse=True
-    )
-    selected_year = st.selectbox("연도를 선택하세요", available_years)
+# 5. 선택 연도 데이터 필터링
+df_year = df_batter[df_batter["연도"] == selected_year].copy()
+if only_qualified:
+    df_year = df_year[df_year["규정타석충족"]]
 
-with col2:
-    player_name = st.text_input(
-        "선수 이름을 입력하세요", placeholder="예: 김도영, 디아즈"
-    )
+df_year = df_year.sort_values(by="MVP점수", ascending=False).reset_index(
+    drop=True
+)
 
-# 5. 조회 및 MVP 점수 계산 버튼
-if st.button("MVP 점수 계산하기"):
-    if not player_name.strip():
-        st.warning("선수 이름을 입력해주세요.")
-    else:
-        # 데이터 검색
-        result = df_batter[
+# 6. 메인 화면 - 1위 vs 실제 MVP 비교 카드
+st.subheader(f"📊 {selected_year}시즌 MVP 비교 결과")
+
+if not df_year.empty:
+    model_top = df_year.iloc[0]  # 수학 모델 1위
+
+    col1, col2 = st.columns(2)
+
+    # [좌측] 수학적 모델 선정 최고점 1위 타자
+    with col1:
+        st.success("🤖 **[모델 산출 1위] 최우수 타자**")
+        st.markdown(f"### **{model_top['선수명']}** ({model_top['팀']})")
+        st.metric("🌟 MVP 계산 점수", f"{model_top['MVP점수']:.4f}")
+        st.write(
+            f"• 타율: `{model_top['타율']:.3f}` | 출루율: `{model_top['출루율']:.3f}` | 장타율: `{model_top['장타율']:.3f}`"
+        )
+        st.write(
+            f"• 타석: `{int(model_top['타석'])}` / `{int(model_top['홈런'])}홈런`"
+        )
+
+    # [우측] 해당 연도 실제 KBO MVP 타자
+    with col2:
+        actual_info = ACTUAL_MVPS.get(
+            selected_year, {"선수명": "미정", "팀": "-"}
+        )
+        actual_player_data = df_batter[
             (df_batter["연도"] == selected_year)
-            & (df_batter["선수명"].str.contains(player_name, na=False))
+            & (df_batter["선수명"] == actual_info["선수명"])
         ]
 
-        if result.empty:
-            st.error(
-                f"❌ {selected_year}년도 데이터에서 '{player_name}' 선수를 찾을 수 없습니다."
+        st.info("🏆 **[실제 KBO] 수상 타자**")
+        st.markdown(f"### **{actual_info['선수명']}** ({actual_info['팀']})")
+
+        if not actual_player_data.empty:
+            act_row = actual_player_data.iloc[0]
+            st.metric("🌟 MVP 계산 점수", f"{act_row['MVP점수']:.4f}")
+            st.write(
+                f"• 타율: `{act_row['타율']:.3f}` | 출루율: `{act_row['출루율']:.3f}` | 장타율: `{act_row['장타율']:.3f}`"
+            )
+            st.write(
+                f"• 타석: `{int(act_row['타석'])}` / `{int(act_row['홈런'])}홈런`"
             )
         else:
-            for _, row in result.iterrows():
-                slg = row["장타율"]
-                avg = row["타율"]
-                obp = row["출루율"]
+            st.write("해당 선수 데이터 검색 중...")
 
-                # 가중합 계산
-                mvp_score = (slg * W_SLG) + (avg * W_AVG) + (obp * W_OBP)
+    # 두 결과가 일치하는지 판정
+    st.markdown("---")
+    if actual_info["선수명"] == model_top["선수명"]:
+        st.balloons()
+        st.success(
+            f"🎯 **일치!** {selected_year}년 수학적 선택 모델 1위({model_top['선수명']})와 실제 KBO MVP가 정확히 일치합니다!"
+        )
+    else:
+        st.warning(
+            f"💡 **차이 발생!** {selected_year}년 모델 1위는 **{model_top['선수명']}**, 실제 수상 타자는 **{actual_info['선수명']}**입니다."
+        )
 
-                # 결과 출력 카드
-                st.success(
-                    f"### 🏆 {row['연도']}년 {row['선수명']} ({row['팀']})"
-                )
+# 7. 전체 리더보드 (순위표)
+st.subheader(f"📋 {selected_year}시즌 전체 타자 MVP 점수 순위표")
 
-                metric_col1, metric_col2, metric_col3, metric_col4 = (
-                    st.columns(4)
-                )
-                metric_col1.metric("타율 (AVG)", f"{avg:.3f}")
-                metric_col2.metric("출루율 (OBP)", f"{obp:.3f}")
-                metric_col3.metric("장타율 (SLG)", f"{slg:.3f}")
-                metric_col4.metric("🌟 MVP 점수", f"{mvp_score:.4f}")
+display_cols = ["선수명", "팀", "타석", "타율", "출루율", "장타율", "OPS", "MVP점수"]
+df_display = df_year[display_cols].copy()
+df_display.index = df_display.index + 1  # 1위부터 시작하도록 인덱스 조정
+df_display.columns = [
+    "선수명",
+    "팀",
+    "타석",
+    "타율",
+    "출루율",
+    "장타율",
+    "OPS",
+    "MVP 점수",
+]
 
-                st.write(
-                    f"**계산식**: `({slg:.3f} × 0.373) + ({avg:.3f} × 0.331) + ({obp:.3f} × 0.296) = {mvp_score:.4f}`"
-                )
-                st.markdown("---")
+st.dataframe(
+    df_display.style.format(
+        {
+            "타율": "{:.3f}",
+            "출루율": "{:.3f}",
+            "장타율": "{:.3f}",
+            "OPS": "{:.3f}",
+            "MVP 점수": "{:.4f}",
+            "타석": "{:.0f}",
+        }
+    ),
+    use_container_width=True,
+)
