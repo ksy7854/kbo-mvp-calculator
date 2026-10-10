@@ -9,8 +9,7 @@ st.caption(
 )
 
 
-# 2. 연도별 KBO 실제 MVP 타자 단독 수상 데이터 (2010~2025)
-# (투수가 MVP를 수상한 해는 최우수 타자를 기재)
+# 2. 연도별 KBO 실제 MVP 타자 수상 데이터 (2010~2025)
 ACTUAL_MVPS = {
     2010: {"선수명": "이대호", "팀": "롯데"},
     2011: {"선수명": "최형우", "팀": "삼성"},  # (실제 MVP 윤석민 투수)
@@ -48,8 +47,7 @@ def load_and_process_data():
         (df["장타율"] * W_SLG) + (df["타율"] * W_AVG) + (df["출루율"] * W_OBP)
     )
 
-    # 연도별 규정 타석 계산 (144경기 기준 446타석, 2014 이전은 396~412타석)
-    # 규정타석 공식 = 팀 경기 수 * 3.1
+    # 연도별 규정 타석 계산 (144경기 기준 446타석)
     def get_qualified_pa(year):
         if year in [2010, 2011, 2012]:
             return 133 * 3.1  # 412타석
@@ -66,14 +64,30 @@ def load_and_process_data():
 
 df_batter = load_and_process_data()
 
-# 4. 사이드바 - 연도 선택 및 규정 타석 필터 옵션
-st.sidebar.header("⚙️ 분석 설정")
+# ----------------------------------------------------
+# 4. 연도 선택 섹션 (2010 ~ 2025 전체 목록)
+# ----------------------------------------------------
+st.markdown("---")
+input_col1, input_col2 = st.columns([2, 2])
+
+# 데이터셋에 존재하는 2010~2025 전체 연도 추출
 available_years = sorted(
     df_batter["연도"].dropna().unique().astype(int), reverse=True
 )
-selected_year = st.sidebar.selectbox("연도 선택", available_years)
 
-only_qualified = st.sidebar.checkbox("규정 타석 충족자만 보기", value=True)
+with input_col1:
+    selected_year = st.selectbox(
+        "📅 조회할 연도를 선택하세요 (2010 ~ 2025)",
+        options=available_years,
+        index=available_years.index(2024),  # 기본값 2024년
+    )
+
+with input_col2:
+    st.write("")
+    st.write("")
+    only_qualified = st.checkbox("규정 타석 충족자만 보기", value=True)
+
+st.markdown("---")
 
 # 5. 선택 연도 데이터 필터링
 df_year = df_batter[df_batter["연도"] == selected_year].copy()
@@ -94,7 +108,7 @@ if not df_year.empty:
 
     # [좌측] 수학적 모델 선정 최고점 1위 타자
     with col1:
-        st.success("🤖 **[모델 산출 1위] 최우수 타자**")
+        st.success("🤖 **[수학 모델 산출 1위] 최우수 타자**")
         st.markdown(f"### **{model_top['선수명']}** ({model_top['팀']})")
         st.metric("🌟 MVP 계산 점수", f"{model_top['MVP점수']:.4f}")
         st.write(
@@ -127,26 +141,28 @@ if not df_year.empty:
                 f"• 타석: `{int(act_row['타석'])}` / `{int(act_row['홈런'])}홈런`"
             )
         else:
-            st.write("해당 선수 데이터 검색 중...")
+            st.write("해당 연도 데이터 검색 중...")
 
-    # 두 결과가 일치하는지 판정
+    # 일치 여부 판정
     st.markdown("---")
     if actual_info["선수명"] == model_top["선수명"]:
         st.balloons()
         st.success(
-            f"🎯 **일치!** {selected_year}년 수학적 선택 모델 1위({model_top['선수명']})와 실제 KBO MVP가 정확히 일치합니다!"
+            f"🎯 **일치!** {selected_year}년 수학적 모델 1위({model_top['선수명']})와 실제 KBO MVP 타자가 정확히 일치합니다!"
         )
     else:
         st.warning(
-            f"💡 **차이 발생!** {selected_year}년 모델 1위는 **{model_top['선수명']}**, 실제 수상 타자는 **{actual_info['선수명']}**입니다."
+            f"💡 **차이 발생!** {selected_year}년 모델 산출 1위는 **{model_top['선수명']}**, 실제 수상 타자는 **{actual_info['선수명']}**입니다."
         )
+else:
+    st.error(f"❌ {selected_year}년도에 해당하는 데이터가 없습니다.")
 
 # 7. 전체 리더보드 (순위표)
 st.subheader(f"📋 {selected_year}시즌 전체 타자 MVP 점수 순위표")
 
 display_cols = ["선수명", "팀", "타석", "타율", "출루율", "장타율", "OPS", "MVP점수"]
 df_display = df_year[display_cols].copy()
-df_display.index = df_display.index + 1  # 1위부터 시작하도록 인덱스 조정
+df_display.index = df_display.index + 1  # 1위부터 시작
 df_display.columns = [
     "선수명",
     "팀",
